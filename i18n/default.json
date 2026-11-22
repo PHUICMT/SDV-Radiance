@@ -1636,6 +1636,8 @@
   "tuner.costmeasure.tag": "{{ms}} ms",
   "tuner.costmeasure.allcheap": "Nothing here costs this machine more than 0.05 ms a frame.",
   "tuner.bloomwideglow": "Wide glow",
+  "tuner.bloomwideglowlamps": "Wide glow only near lamps at night",
+  "help.bloomwideglowlamps": "At night the wide glow comes only from lamps, lit windows and flames. Pale flowers and grass under a lamp no longer turn into white haze.",
   "help.bloomwideglow": "A second, much wider glow round lamps, windows and the sun, so light seems to fill the air around it. 0 is off.",
   "config.bloom.wideglow.name": "Wide glow",
   "config.bloom.wideglow.tooltip": "A second, much wider glow round lamps, windows and the sun, so light seems to fill the air around it. 0 is off."

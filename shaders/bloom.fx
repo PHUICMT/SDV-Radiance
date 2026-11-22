@@ -36,6 +36,32 @@ float EmissiveBoost;  // 0..1: how far a saturated bright pixel may glow below T
 float WideGlow;       // how much of the wide layer is added beside the tight glow (0 = not built), set on the CPU
 float WideFromLights; // 1 on the first shrink only: keep what reads as a light, drop bright grey
 float2 BrightGridShift; // the frame's UV past the bright pass's last world-fixed texel: read back by it, read on by the composite
+// The lamps' own lightmap (floodlight.fx's samplers and mapping, as fog.fx reads it). At night
+// the wide layer keeps only what stands in a lamp's light: with the night darkness turned down,
+// pale grass and white flowers were bright enough to pass as lights, and grown to a quarter of
+// the screen at the night gain they turned a lit farm into white fog (DaikoharaHajime, 2.5.0).
+texture LightMapTexture;
+sampler2D LightMapSampler = sampler_state
+{
+    Texture = <LightMapTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+texture LightMap2Texture;
+sampler2D LightMap2Sampler = sampler_state
+{
+    Texture = <LightMap2Texture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+float2 WorldTileOffset;  // viewport origin in world tiles, continuous
+float2 MapOrigin;        // world tile coordinate of the lightmap's (0,0) cell
+float2 MapSize;          // lightmap size in cells
+float2 Map2Origin;
+float2 Map2Size;
+float LightMapBlend;     // 0 = LightMapTexture only, 1 = LightMap2Texture only
+float3 SkyLevel;         // what an open cell holds with no lamp near it
+float WideLampsOnly;     // 0 by day or with no lightmap .. 1 at night: the first shrink keeps only lamp-lit light
 float4 WideShrinkMap; // xy scale, zw offset: a level's UV to its source's UV, for the first shrink's world-fixed grid
 float4 WideReadMap;   // xy scale, zw offset: the screen's UV to the finished layer's UV
 
@@ -220,6 +246,23 @@ float4 WideDownPS(PixelInput input) : SV_TARGET
     float brightest = max(sum.r, max(sum.g, sum.b));
     float saturation = (brightest - min(sum.r, min(sum.g, sum.b))) / max(brightest, 1e-4);
     sum *= lerp(1.0, smoothstep(0.15, 0.45, saturation), WideFromLights);
+    if (WideLampsOnly > 0.0)
+    {
+        float2 worldTile = (uv - BrightGridShift) * TilesPerScreen + WorldTileOffset;
+        float3 light = tex2Dlod(LightMapSampler, float4((worldTile - MapOrigin) / MapSize, 0.0, 0.0)).rgb * 2.0;
+        if (LightMapBlend > 0.0)
+            light = lerp(light, tex2Dlod(LightMap2Sampler, float4((worldTile - Map2Origin) / Map2Size, 0.0, 0.0)).rgb * 2.0, LightMapBlend);
+        // At night only what stands near a lamp feeds the layer, and only what has the colour of
+        // light. The share falls off as the square of the lamp's light (fog.fx measured a street
+        // lamp's excess at 0.3 to 0.4 at most), so the haze gathers round the bulb; and the colour
+        // test is tighter than by day, because white and pale green flowers inside a lamp's pool
+        // pass the day test and turned the pool into white fog. Feeding the lamp's own light
+        // instead was tried: the lightmap's broad fields came through as blobs over the town.
+        float3 excess = max(light - SkyLevel * 1.05, 0.0);
+        float reach = saturate(max(excess.r, max(excess.g, excess.b)) / 0.35);
+        float nightKeep = reach * reach * smoothstep(0.35, 0.65, saturation);
+        sum *= lerp(1.0, nightKeep, WideLampsOnly);
+    }
     return float4(sum, 1.0);
 }
 

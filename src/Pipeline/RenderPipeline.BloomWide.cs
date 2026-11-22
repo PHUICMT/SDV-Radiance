@@ -25,7 +25,7 @@ namespace SDVRadiance
         /// shader in use has no wide glow (an old bloom.mgfxo).</summary>
         /// <param name="brightGridRemainder">What <see cref="PixelsPastWorldGrid"/> gave the bright
         /// pass, in source pixels: the layer is read back shifted by it too.</param>
-        private RenderTarget2D? BuildWideGlow(SpriteBatch spriteBatch, Effect bloom, RenderTarget2D brightPass, Vector2 brightGridRemainder, float sourcePixelsPerTexel)
+        private RenderTarget2D? BuildWideGlow(SpriteBatch spriteBatch, Effect bloom, RenderTarget2D brightPass, Vector2 brightGridRemainder, float sourcePixelsPerTexel, float lampsOnly)
         {
             EffectTechnique? down = bloom.Techniques["WideDown"], up = bloom.Techniques["WideUp"];
             if (down == null || up == null)
@@ -52,6 +52,7 @@ namespace SDVRadiance
                 bool firstShrink = source == brightPass;
                 GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / source.Width, 1f / source.Height));
                 GetParam(bloom, "WideFromLights")?.SetValue(firstShrink ? 1f : 0f);
+                GetParam(bloom, "WideLampsOnly")?.SetValue(firstShrink ? lampsOnly : 0f);
                 GetParam(bloom, "WideShrinkMap")?.SetValue(firstShrink ? shrinkMap : new Vector4(1f, 1f, 0f, 0f));
                 Pass(spriteBatch, source, level!, bloom);
                 source = level!;

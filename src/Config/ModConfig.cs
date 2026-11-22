@@ -394,6 +394,9 @@ namespace SDVRadiance
         /// <summary>A second, much wider glow round bright things, 0 to 1. 0 is the bloom as it
         /// always was and builds nothing.</summary>
         public float BloomWideGlow { get; set; } = 0f;
+        /// <summary>At night the wide glow takes only the coloured light close to a lamp, so pale
+        /// flowers and grass inside a lamp's light no longer turn into white haze.</summary>
+        public bool BloomWideGlowLampsAtNight { get; set; }
 
         // --- Color grade ---
         /// <summary>OFF by default from 1.5.5: the mod ships with the game's own colours.</summary>

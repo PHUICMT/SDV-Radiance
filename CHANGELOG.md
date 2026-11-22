@@ -2,6 +2,20 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.5.1 - 2026-11-22
+
+### Added
+
+- **Wide glow only near lamps at night (off by default).** With the night darkness turned down, pale
+  flowers and grass inside a lamp's light were bright enough to feed the wide glow, and at night it
+  spreads far, so the whole pool round a lamp went white. "Wide glow only near lamps at night", under
+  Wide glow, lets only the coloured light close to a lamp feed it after dark, so the haze stays round
+  the bulb. Author's pick turns it on. Reported by DaikoharaHajime.
+
+### For translators
+
+New keys: `tuner.bloomwideglowlamps`, `help.bloomwideglowlamps`.
+
 ## 2.5.0 - 2026-11-20
 
 ### Fixed

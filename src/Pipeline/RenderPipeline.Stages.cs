@@ -244,8 +244,18 @@ namespace SDVRadiance
             Pass(spriteBatch, source, bloomA, bloom);
             // The wide layer is grown from the bright pass before the tight blur overwrites it.
             float wideGlow = MathHelper.Clamp(config.BloomWideGlow, 0f, 1f);
+            // At night only what a lamp lights may feed the wide layer (see bloom.fx). It needs the
+            // lightmap; without one the layer keeps the colour test alone, as before.
+            bool lightmapOnHand = config.FloodLightingEnabled
+                && ((_flood?.Texture) != null || (_cascadesReady && (_cascades?.Texture) != null));
+            float wideLampsOnly = wideGlow > 0f && lightmapOnHand && config.BloomWideGlowLampsAtNight ? bloomNight : 0f;
+            if (wideLampsOnly > 0f)
+            {
+                SetFloodMapParams(bloom, config);
+                GetParam(bloom, "SkyLevel")?.SetValue(FloodLightmap.SkyColour(outdoors: Game1.currentLocation?.IsOutdoors ?? true, config));
+            }
             RenderTarget2D? wideLayer = wideGlow > 0f
-                ? BuildWideGlow(spriteBatch, bloom, bloomA, brightGridRemainder, source.Width / (float)bloomA.Width)
+                ? BuildWideGlow(spriteBatch, bloom, bloomA, brightGridRemainder, source.Width / (float)bloomA.Width, wideLampsOnly)
                 : null;
 
             GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / halfScratchA.Width, 0f));

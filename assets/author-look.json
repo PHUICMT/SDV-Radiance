@@ -2,7 +2,7 @@
   "Cpu": "Intel Core Ultra 7 270K Plus",
   "Ram": "128 GB",
   "Gpu": "NVIDIA GeForce RTX 5080",
-  "Taken": "2026-11-20",
+  "Taken": "2026-11-22",
   "Values": {
     "BloomEnabled": "True",
     "BloomThreshold": "0.72",
@@ -389,6 +389,7 @@
     "WindowSceneReachTiles": "2.0",
     "ShadowPlayerFeetRaise": "0.0",
     "WaterReflectPlayer": "True",
-    "WaterReflectTopEase": "0.25"
+    "WaterReflectTopEase": "0.25",
+    "BloomWideGlowLampsAtNight": "True"
   }
 }

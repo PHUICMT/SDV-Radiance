@@ -3897,6 +3897,7 @@ namespace SDVRadiance
             Slider("tuner.bloomthreshold", 0f, 1f, () => _config.BloomThreshold, value => _config.BloomThreshold = value, "help.bloomthreshold");
             Slider("tuner.bloomemissiveboost", 0f, 1f, () => _config.BloomEmissiveBoost, value => _config.BloomEmissiveBoost = value, "help.bloomemissiveboost");
             Slider("tuner.bloomwideglow", 0f, 1f, () => _config.BloomWideGlow, value => _config.BloomWideGlow = value, "help.bloomwideglow");
+            Toggle("tuner.bloomwideglowlamps", () => _config.BloomWideGlowLampsAtNight, value => _config.BloomWideGlowLampsAtNight = value, "help.bloomwideglowlamps");
             EndDependsOn();
         }
 

@@ -517,6 +517,7 @@ namespace SDVRadiance
             (389, nameof(ModConfig.ShadowPlayerFeetRaise), Look),
             (390, nameof(ModConfig.WaterReflectPlayer), Look),
             (391, nameof(ModConfig.WaterReflectTopEase), Look),
+            (392, nameof(ModConfig.BloomWideGlowLampsAtNight), Look),
         ];
 
         private static Dictionary<int, (string Property, bool IsPerformance)>? _settingById;
